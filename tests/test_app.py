@@ -13,11 +13,23 @@ import app as app_module
 from app import app as flask_app
 
 
+class _NoCloseConn:
+    """Wraps a sqlite3 connection and makes close() a no-op so the
+    in-memory DB survives across multiple requests in the same test."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def close(self):
+        pass  # intentionally do nothing
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 @pytest.fixture
 def client():
     flask_app.config["TESTING"] = True
 
-    # Single shared in-memory connection for the entire test
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript("""
@@ -41,8 +53,8 @@ def client():
     """)
     conn.commit()
 
-    # Patch get_db to always return the same connection
-    app_module.get_db = lambda: conn
+    wrapped = _NoCloseConn(conn)
+    app_module.get_db = lambda: wrapped
 
     with flask_app.test_client() as c:
         yield c
