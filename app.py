@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import sqlite3
 import os
-this_is_broken_on_purpose!!!
 
 APP_VERSION = "3.0.1"
 DB_NAME = os.environ.get("DB_NAME", "aceest_fitness.db")
