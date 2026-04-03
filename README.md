@@ -16,7 +16,7 @@ Git → GitHub → GitHub Actions CI → Jenkins BUILD → Docker.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/<your-username>/aceest-gym.git
+git clone https://github.com/2024tm93502-Viveka_M/aceest-gym.git
 cd aceest-gym
 
 # 2. Create virtual environment and install deps
