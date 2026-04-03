@@ -1,105 +1,100 @@
-# ACEest Gym Fitness — DevOps Assignment (BITS WILP)
+# ACEest Fitness & Gym — DevOps Assignment (BITS WILP)
 
-## Application
-Python/Tkinter gym client management system with SQLite, progress tracking, and charts.
+## Overview
+Flask-based gym client management REST API with a full DevOps pipeline:
+Git → GitHub → GitHub Actions CI → Jenkins BUILD → Docker.
 
 ## Tech Stack
-- **App**: Python 3, Tkinter, SQLite, Matplotlib
-- **CI/CD**: Jenkins Pipeline
-- **Version Control**: Git
-- **Deployment Target**: BITS VM Lab (Linux)
+- **App**: Python 3.11, Flask, SQLite
+- **Tests**: Pytest
+- **Container**: Docker
+- **CI**: GitHub Actions
+- **BUILD**: Jenkins
+- **VCS**: Git / GitHub
 
-## Version History (Git Tags)
-| Tag    | File              | Features Added                          |
-|--------|-------------------|-----------------------------------------|
-| v1.0   | Aceestver-1.0.py  | Basic program display                   |
-| v1.1   | Aceestver-1.1.py  | Calorie factor, styles                  |
-| v2.0   | Aceestver-2.1.2.py| SQLite DB, save/load client             |
-| v2.1   | Aceestver-2.2.1.py| Progress chart (matplotlib)             |
-| v2.2   | Aceestver-2.2.4.py| Height, target weight, workout logging  |
-| v3.0   | Aceestver-3.0.1.py| Full workout + metrics + BMI (STABLE)   |
-| v3.1   | Aceestver-3.1.2.py| Login, PDF export, AI program generator |
-| v3.2   | Aceestver-3.2.4.py| Membership billing, embedded charts     |
+## Local Setup & Execution
 
-## Jenkins Pipeline Stages
-1. **Checkout** — pulls code from Git
-2. **Setup Python Environment** — creates venv, installs deps
-3. **Run Tests** — pytest; auto-rollback on failure
-4. **Package** — tars the release with git commit hash
-5. **Deploy to BITS VM** — SCP + SSH deploy; auto-rollback on failure
-6. **Smoke Test** — validates syntax on VM; auto-rollback on failure
-
-## Rollback Strategy
-- `deploy.sh` saves the current symlink as `previous` before switching
-- `rollback.sh` flips `current` symlink back to `previous`
-- Jenkins calls `rollback.sh` automatically in `post { failure }` blocks
-- Last 5 releases are kept on disk for manual rollback if needed
-
-## Setup Instructions
-
-### 1. On your local machine
 ```bash
-git init
-git add .
-git commit -m "Initial commit - v1.0"
-git tag v1.0
+# 1. Clone the repo
+git clone https://github.com/<your-username>/aceest-gym.git
+cd aceest-gym
 
-# Add each version as a commit + tag
-git add app.py
-git commit -m "feat: add SQLite persistence - v2.0"
-git tag v2.0
-# ... repeat for each version
+# 2. Create virtual environment and install deps
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Run the app
+python app.py
+# App runs at http://localhost:5000
 ```
 
-### 2. Push to Git server (GitHub / GitLab / Gitea on BITS VM)
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Health check + version |
+| GET | `/programs` | List all fitness programs |
+| POST | `/clients` | Save a client |
+| GET | `/clients/<name>` | Get client details |
+| POST | `/clients/<name>/progress` | Log weekly adherence |
+| GET | `/clients/<name>/bmi` | Calculate BMI |
+
+## Running Tests Manually
+
 ```bash
-git remote add origin <your-git-repo-url>
-git push -u origin main --tags
+# Activate venv first
+pytest tests/ -v
 ```
 
-### 3. On the BITS VM — Install Jenkins
+## Docker
+
 ```bash
-sudo apt update
-sudo apt install -y openjdk-17-jdk
-wget -q -O - https://pkg.jenkins.io/debian/jenkins.io.key | sudo apt-key add -
-sudo sh -c 'echo deb http://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
-sudo apt update && sudo apt install -y jenkins
-sudo systemctl start jenkins
-sudo systemctl enable jenkins
-# Access Jenkins at http://<VM-IP>:8080
+# Build image
+docker build -t aceest-gym .
+
+# Run container
+docker run -p 5000:5000 aceest-gym
+
+# Run tests inside container
+docker run --rm aceest-gym pytest tests/ -v
 ```
 
-### 4. On the BITS VM — Install Python deps
-```bash
-sudo apt install -y python3 python3-pip python3-venv python3-tk
-sudo mkdir -p /opt/aceest-gym
-sudo chown jenkins:jenkins /opt/aceest-gym
-```
+## GitHub Actions CI Pipeline
 
-### 5. In Jenkins UI
-1. New Item → Pipeline
-2. Pipeline → "Pipeline script from SCM" → Git → your repo URL
-3. Add credentials:
-   - `BITS_VM_HOST` — VM IP address (Secret Text)
-   - `BITS_VM_USER` — SSH username (Secret Text)
-   - `BITS_VM_SSH_KEY` — SSH private key (SSH Username with private key)
-4. Save → Build Now
+Triggered on every `push` and `pull_request` to `main`.
 
-### 6. Run the app on VM (after deploy)
-```bash
-cd /opt/aceest-gym/current
-/opt/aceest-gym/venv/bin/python app.py
-# For headless VM, use X11 forwarding:
-# ssh -X user@vm-ip
-# then run the above
-```
+Stages:
+1. **Lint** — `py_compile` checks for syntax errors
+2. **Unit Tests** — pytest runs against the Flask app
+3. **Docker Build** — builds the container image
+4. **Container Tests** — pytest runs inside the built container
 
-## Simulating a Failure + Rollback (for demo)
-```bash
-# On your local machine, introduce a syntax error
-echo "this is broken" >> app.py
-git add app.py
-git commit -m "bad deploy - will trigger rollback"
-git push
-# Jenkins will: run tests → fail → call rollback.sh → restore previous version
-```
+Pipeline file: `.github/workflows/main.yml`
+
+## Jenkins BUILD Integration
+
+Jenkins pulls the latest code from GitHub and performs:
+1. **Checkout** — pulls from GitHub
+2. **Lint** — syntax validation
+3. **Docker Build** — builds the image tagged with `BUILD_NUMBER`
+4. **Run Tests in Container** — pytest inside Docker
+5. **Tag as Latest** — marks the image as `aceest-gym:latest`
+
+Pipeline file: `Jenkinsfile`
+
+### Jenkins Setup on BITS VM
+1. Open Jenkins at `http://<bits-vm-ip>:8080`
+2. New Item → Pipeline → name it `aceest-gym`
+3. Pipeline → Pipeline script from SCM → Git
+4. Repository URL → your GitHub repo URL
+5. Branch → `*/main` | Script Path → `Jenkinsfile`
+6. Save → Build Now
+
+## Version History
+
+| Tag | Description |
+|-----|-------------|
+| v1.0 | Initial Flask app with SQLite |
+| v2.0 | Added progress tracking endpoints |
+| v3.0 | Full BMI, metrics, workout logging (STABLE) |

@@ -1,98 +1,105 @@
 """
-Headless unit tests for ACEest app — no display required (CI-safe).
+Pytest suite for ACEest Flask app — CI-safe, no display required.
 """
+import pytest
+import json
 import sys
 import os
-import sqlite3
-import unittest
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Patch tkinter before importing app so it doesn't need a display
-import unittest.mock as mock
-sys.modules['tkinter'] = mock.MagicMock()
-sys.modules['tkinter.ttk'] = mock.MagicMock()
-sys.modules['tkinter.messagebox'] = mock.MagicMock()
-sys.modules['matplotlib'] = mock.MagicMock()
-sys.modules['matplotlib.pyplot'] = mock.MagicMock()
+os.environ["DB_NAME"] = ":memory:"
+
+import app as app_module
+from app import app as flask_app, init_db
 
 
-class TestDatabase(unittest.TestCase):
-    def setUp(self):
-        self.db_file = tempfile.mktemp(suffix=".db")
-        self.conn = sqlite3.connect(self.db_file)
-        self.cur = self.conn.cursor()
-        self.cur.execute("""
-            CREATE TABLE clients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE, age INTEGER, height REAL, weight REAL,
-                program TEXT, calories INTEGER, target_weight REAL, target_adherence INTEGER
-            )
-        """)
-        self.cur.execute("""
-            CREATE TABLE progress (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_name TEXT, week TEXT, adherence INTEGER
-            )
-        """)
-        self.conn.commit()
-
-    def tearDown(self):
-        self.conn.close()
-        os.unlink(self.db_file)
-
-    def test_insert_client(self):
-        self.cur.execute(
-            "INSERT INTO clients (name, age, weight, program, calories) VALUES (?, ?, ?, ?, ?)",
-            ("TestUser", 25, 75.0, "Fat Loss (FL) - 3 day", 1650)
-        )
-        self.conn.commit()
-        self.cur.execute("SELECT name, weight FROM clients WHERE name='TestUser'")
-        row = self.cur.fetchone()
-        self.assertIsNotNone(row)
-        self.assertEqual(row[0], "TestUser")
-        self.assertEqual(row[1], 75.0)
-
-    def test_calorie_calculation(self):
-        weight = 80.0
-        factor = 22  # Fat Loss factor
-        calories = int(weight * factor)
-        self.assertEqual(calories, 1760)
-
-    def test_calorie_muscle_gain(self):
-        weight = 80.0
-        factor = 35  # Muscle Gain factor
-        calories = int(weight * factor)
-        self.assertEqual(calories, 2800)
-
-    def test_progress_insert(self):
-        self.cur.execute("INSERT INTO clients (name, program) VALUES (?, ?)", ("Alice", "Beginner (BG)"))
-        self.cur.execute("INSERT INTO progress (client_name, week, adherence) VALUES (?, ?, ?)", ("Alice", "Week 01 - 2025", 85))
-        self.conn.commit()
-        self.cur.execute("SELECT adherence FROM progress WHERE client_name='Alice'")
-        row = self.cur.fetchone()
-        self.assertEqual(row[0], 85)
-
-    def test_unique_client_name(self):
-        self.cur.execute("INSERT INTO clients (name, program) VALUES (?, ?)", ("Bob", "Beginner (BG)"))
-        self.conn.commit()
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.cur.execute("INSERT INTO clients (name, program) VALUES (?, ?)", ("Bob", "Beginner (BG)"))
-            self.conn.commit()
-
-    def test_bmi_calculation(self):
-        weight, height_cm = 70.0, 175.0
-        bmi = round(weight / (height_cm / 100) ** 2, 1)
-        self.assertEqual(bmi, 22.9)
-
-    def test_app_version_present(self):
-        # Read app.py and verify version string exists
-        app_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")
-        with open(app_path) as f:
-            content = f.read()
-        self.assertIn("APP_VERSION", content)
+@pytest.fixture
+def client():
+    flask_app.config["TESTING"] = True
+    app_module.DB_NAME = ":memory:"
+    with flask_app.test_client() as c:
+        with flask_app.app_context():
+            init_db()
+        yield c
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_index(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    data = json.loads(res.data)
+    assert data["status"] == "running"
+    assert "version" in data
+
+
+def test_get_programs(client):
+    res = client.get("/programs")
+    assert res.status_code == 200
+    data = json.loads(res.data)
+    assert "Fat Loss (FL) - 3 day" in data
+    assert "Beginner (BG)" in data
+
+
+def test_save_client(client):
+    res = client.post("/clients", json={
+        "name": "TestUser", "age": 25, "height": 175.0,
+        "weight": 80.0, "program": "Fat Loss (FL) - 3 day"
+    })
+    assert res.status_code == 201
+    data = json.loads(res.data)
+    assert data["calories"] == 1760   # 80 * 22
+
+
+def test_save_client_missing_fields(client):
+    res = client.post("/clients", json={"name": "NoProgram"})
+    assert res.status_code == 400
+
+
+def test_get_client(client):
+    client.post("/clients", json={
+        "name": "Alice", "weight": 60.0, "program": "Beginner (BG)"
+    })
+    res = client.get("/clients/Alice")
+    assert res.status_code == 200
+    data = json.loads(res.data)
+    assert data["name"] == "Alice"
+
+
+def test_get_client_not_found(client):
+    res = client.get("/clients/Ghost")
+    assert res.status_code == 404
+
+
+def test_save_progress(client):
+    client.post("/clients", json={"name": "Bob", "program": "Beginner (BG)"})
+    res = client.post("/clients/Bob/progress", json={"week": "Week 01 - 2025", "adherence": 85})
+    assert res.status_code == 201
+
+
+def test_save_progress_missing_fields(client):
+    res = client.post("/clients/Bob/progress", json={"adherence": 80})
+    assert res.status_code == 400
+
+
+def test_bmi_calculation(client):
+    client.post("/clients", json={
+        "name": "BmiUser", "weight": 70.0, "height": 175.0, "program": "Beginner (BG)"
+    })
+    res = client.get("/clients/BmiUser/bmi")
+    assert res.status_code == 200
+    data = json.loads(res.data)
+    assert data["bmi"] == 22.9
+    assert data["category"] == "Normal"
+
+
+def test_calorie_muscle_gain(client):
+    res = client.post("/clients", json={
+        "name": "MuscleUser", "weight": 80.0, "program": "Muscle Gain (MG) - PPL"
+    })
+    data = json.loads(res.data)
+    assert data["calories"] == 2800   # 80 * 35
+
+
+def test_app_version_present():
+    assert hasattr(app_module, "APP_VERSION")
+    assert app_module.APP_VERSION != ""
