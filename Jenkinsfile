@@ -16,6 +16,20 @@ pipeline {
             }
         }
 
+        stage('Save Previous Version') {
+            steps {
+                echo "Saving current latest as previous for rollback..."
+                sh '''
+                    if docker image inspect ${IMAGE_NAME}:latest > /dev/null 2>&1; then
+                        docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:previous
+                        echo "Saved ${IMAGE_NAME}:latest as ${IMAGE_NAME}:previous"
+                    else
+                        echo "No previous image found — first build, skipping"
+                    fi
+                '''
+            }
+        }
+
         stage('Lint') {
             steps {
                 echo "Checking Python syntax..."
@@ -43,18 +57,26 @@ pipeline {
         stage('Tag as Latest') {
             steps {
                 sh 'docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest'
-                echo "Image tagged as ${IMAGE_NAME}:latest"
+                echo "Promoted ${IMAGE_NAME}:${IMAGE_TAG} to latest"
             }
         }
     }
 
     post {
         success {
-            echo "BUILD SUCCESS — ${IMAGE_NAME}:${IMAGE_TAG} is ready"
+            echo "BUILD SUCCESS — ${IMAGE_NAME}:${IMAGE_TAG} is now latest"
         }
         failure {
-            echo "BUILD FAILED — check stage logs above"
-            sh 'docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true'
+            echo "BUILD FAILED — rolling back to previous version"
+            sh '''
+                if docker image inspect ${IMAGE_NAME}:previous > /dev/null 2>&1; then
+                    docker tag ${IMAGE_NAME}:previous ${IMAGE_NAME}:latest
+                    echo "ROLLBACK COMPLETE — restored ${IMAGE_NAME}:previous as latest"
+                else
+                    echo "No previous image to roll back to"
+                fi
+                docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true
+            '''
         }
         always {
             cleanWs()
