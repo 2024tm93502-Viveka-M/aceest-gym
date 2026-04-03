@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, date
 import matplotlib.pyplot as plt
 
-APP_VERSION = "3.0.1"
+APP_VERSION = "2.0.0"
 DB_NAME = "aceest_fitness.db"
 
 
