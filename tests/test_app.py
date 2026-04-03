@@ -3,25 +3,51 @@ Pytest suite for ACEest Flask app — CI-safe, no display required.
 """
 import pytest
 import json
+import sqlite3
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-os.environ["DB_NAME"] = ":memory:"
-
 import app as app_module
-from app import app as flask_app, init_db
+from app import app as flask_app
 
 
 @pytest.fixture
 def client():
     flask_app.config["TESTING"] = True
-    app_module.DB_NAME = ":memory:"
+
+    # Single shared in-memory connection for the entire test
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE, age INTEGER, height REAL, weight REAL,
+            program TEXT, calories INTEGER, target_weight REAL, target_adherence INTEGER
+        );
+        CREATE TABLE progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_name TEXT, week TEXT, adherence INTEGER
+        );
+        CREATE TABLE workouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_name TEXT, date TEXT, workout_type TEXT, duration_min INTEGER, notes TEXT
+        );
+        CREATE TABLE metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_name TEXT, date TEXT, weight REAL, waist REAL, bodyfat REAL
+        );
+    """)
+    conn.commit()
+
+    # Patch get_db to always return the same connection
+    app_module.get_db = lambda: conn
+
     with flask_app.test_client() as c:
-        with flask_app.app_context():
-            init_db()
         yield c
+
+    conn.close()
 
 
 def test_index(client):
@@ -47,7 +73,7 @@ def test_save_client(client):
     })
     assert res.status_code == 201
     data = json.loads(res.data)
-    assert data["calories"] == 1760   # 80 * 22
+    assert data["calories"] == 1760  # 80 * 22
 
 
 def test_save_client_missing_fields(client):
@@ -96,8 +122,9 @@ def test_calorie_muscle_gain(client):
     res = client.post("/clients", json={
         "name": "MuscleUser", "weight": 80.0, "program": "Muscle Gain (MG) - PPL"
     })
+    assert res.status_code == 201
     data = json.loads(res.data)
-    assert data["calories"] == 2800   # 80 * 35
+    assert data["calories"] == 2800  # 80 * 35
 
 
 def test_app_version_present():
